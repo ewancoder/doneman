@@ -1,23 +1,104 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"regexp"
 	"strings"
 
 	"github.com/compose-spec/compose-go/loader"
 	"github.com/compose-spec/compose-go/types"
+	"github.com/joho/godotenv"
 )
 
-// Output struct to match the desired format
-type Output struct {
-	Containers []Container `yaml:"containers"`
+// Converts docker-compose.yml to config.yml.
+func ConvertDockerComposeToConfig(composeFileName, envFileName, networkPattern string) (Config, error) {
+	var output Config
+	envMap := make(map[string]string)
+
+	// Read .env file.
+	if _, err := os.Stat(envFileName); err == nil {
+		envMap, err = godotenv.Read(envFileName)
+		if err != nil {
+			return output, fmt.Errorf("Failed to read .env file: %v", err)
+		}
+	}
+
+	// Read docker-compose.yml file.
+	composeContent, err := os.ReadFile(composeFileName)
+	if err != nil {
+		return output, fmt.Errorf("Failed to read compose file: %v", err)
+	}
+
+	// Remove env_file entries from docker-compose.yml file.
+	composeStringContent := removeEnvFileEntries(string(composeContent))
+	composeContent = []byte(composeStringContent)
+
+	// Parse Docker Compose file.
+	config, err := loader.LoadWithContext(context.Background(), types.ConfigDetails{
+		ConfigFiles: []types.ConfigFile{{Content: composeContent}},
+		Environment: envMap,
+	})
+	if err != nil {
+		return output, fmt.Errorf("Failed to parse compose file: %v", err)
+	}
+
+	projectName := config.Name
+	if projectName == "" {
+		return output, fmt.Errorf("Failed to get project name from compose file")
+	}
+
+	if config.Networks == nil {
+		return output, fmt.Errorf("Failed to get networks from compose file.")
+	}
+
+	// Process each service.
+	for _, service := range config.Services {
+		replicas := 1
+		if service.Deploy != nil && service.Deploy.Replicas != nil {
+			replicas = int(*service.Deploy.Replicas)
+		}
+
+		for i := 1; i <= replicas; i++ {
+			containerName := service.ContainerName
+			if containerName == "" {
+				containerName = fmt.Sprintf("%s-%s", projectName, service.Name)
+				if replicas > 1 {
+					containerName = fmt.Sprintf("%s-%d", containerName, i)
+				}
+			}
+			var networks []string
+			for networkAlias, _ := range service.Networks {
+				if network, exists := config.Networks[networkAlias]; exists {
+					networkName := network.Name
+					if networkName == "" {
+						return output, fmt.Errorf("Failed to get network name from compose file.")
+					}
+					if networkPattern == "" || regexp.MustCompile(networkPattern).MatchString(networkName) {
+						networks = append(networks, networkName)
+					}
+				} else {
+					return output, fmt.Errorf("Failed to get network alias from compose file.")
+				}
+			}
+
+			// Add containers only when they have networks.
+			if len(networks) > 0 {
+				output.Containers = append(output.Containers, Container{
+					Name:     containerName,
+					Networks: networks,
+				})
+			}
+		}
+	}
+
+	return output, nil
 }
 
-// removeEnvFileEntries removes env_file entries from compose content
-func removeEnvFileEntries(content []byte) []byte {
-	lines := strings.Split(string(content), "\n")
+// Removes env_file entries from compose content.
+func removeEnvFileEntries(content string) string {
+	lines := strings.Split(content, "\n")
 	result := make([]string, 0, len(lines))
 	skip := false
 
@@ -33,100 +114,5 @@ func removeEnvFileEntries(content []byte) []byte {
 		result = append(result, line)
 	}
 
-	return []byte(strings.Join(result, "\n"))
-}
-
-// ConvertDockerComposeToOutput converts a Docker Compose file to the specified format
-func ConvertDockerComposeToOutput(composeFilePath, envFilePath string, networkPattern string) (Output, error) {
-	var output Output
-
-	// Read .env file if provided
-	envMap := make(map[string]string)
-	if envFilePath != "" {
-		envContent, err := ioutil.ReadFile(envFilePath)
-		if err != nil {
-			return output, fmt.Errorf("failed to read .env file: %v", err)
-		}
-		for _, line := range strings.Split(string(envContent), "\n") {
-			if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
-				parts := strings.SplitN(line, "=", 2)
-				if len(parts) == 2 {
-					envMap[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-				}
-			}
-		}
-	}
-
-	// Read Docker Compose file
-	composeContent, err := ioutil.ReadFile(composeFilePath)
-	if err != nil {
-		return output, fmt.Errorf("failed to read compose file: %v", err)
-	}
-
-	// Remove env_file entries
-	composeContent = removeEnvFileEntries(composeContent)
-
-	// Parse Docker Compose file
-	config, err := loader.Load(types.ConfigDetails{
-		WorkingDir:  "",
-		ConfigFiles: []types.ConfigFile{{Content: composeContent}},
-		Environment: envMap,
-	})
-	if err != nil {
-		return output, fmt.Errorf("failed to parse compose file: %v", err)
-	}
-
-	// Process each service
-	for _, service := range config.Services {
-		// Handle replicas
-		replicas := 1
-		if service.Deploy != nil && service.Deploy.Replicas != nil {
-			replicas = int(*service.Deploy.Replicas)
-		}
-
-		for i := 1; i <= replicas; i++ {
-			projectName := config.Name
-			containerName := service.ContainerName
-			if containerName == "" {
-				if projectName != "" {
-					containerName = fmt.Sprintf("%s-%s", projectName, service.Name)
-				} else {
-					containerName = service.Name
-				}
-			}
-			if replicas > 1 {
-				containerName = fmt.Sprintf("%s-%d", containerName, i)
-			}
-
-			// Collect networks
-			var networks []string
-			for networkAlias, _ := range service.Networks {
-				if config.Networks != nil {
-					if network, exists := config.Networks[networkAlias]; exists {
-						networkName := network.Name
-						if networkName == "" {
-							networkName = networkAlias
-						}
-						if networkPattern == "" || regexp.MustCompile(networkPattern).MatchString(networkName) {
-							networks = append(networks, networkName)
-						}
-					} else if networkPattern == "" || regexp.MustCompile(networkPattern).MatchString(networkAlias) {
-						networks = append(networks, networkAlias)
-					}
-				} else if networkPattern == "" || regexp.MustCompile(networkPattern).MatchString(networkAlias) {
-					networks = append(networks, networkAlias)
-				}
-			}
-
-			// Add container to output only if it has networks
-			if len(networks) > 0 {
-				output.Containers = append(output.Containers, Container{
-					Name:     containerName,
-					Networks: networks,
-				})
-			}
-		}
-	}
-
-	return output, nil
+	return strings.Join(result, "\n")
 }

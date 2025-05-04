@@ -5,6 +5,7 @@ go 1.24
 require (
 	github.com/compose-spec/compose-go v1.20.2
 	github.com/docker/docker v28.1.1+incompatible
+	github.com/joho/godotenv v1.5.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
