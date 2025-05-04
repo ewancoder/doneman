@@ -23,9 +23,6 @@ type Config struct {
 	Containers []Container `yaml:"containers"`
 }
 
-// CONFIG_FILE
-const defaultConfigPath = "/config.yml"
-
 // INIT_WAIT_TIME_SECONDS
 const defaultWaitTimeSeconds = 60
 
@@ -35,12 +32,38 @@ const defaultIntervalSeconds = 60
 // INTERVAL_NETWORK_RECONNECT_SECONDS
 const defaultNetworkReconnectIntervalSeconds = 10
 
-func main() {
-	configPath := os.Getenv("CONFIG_FILE")
-	if configPath == "" {
-		configPath = defaultConfigPath
-	}
+func fileExists(filename string) bool {
+	_, err := os.Stat(filename)
+	return !os.IsNotExist(err)
+}
 
+func createConfigYml() {
+	if fileExists("docker-compose.yml") && fileExists(".env") {
+		networkPattern := os.Getenv("NETWORK_PATTERN")
+		if networkPattern == "" {
+			networkPattern = ".*"
+		}
+		output, err := ConvertDockerComposeToOutput("docker-compose.yml", ".env", networkPattern)
+		if err == nil {
+			yamlData, err := yaml.Marshal(output)
+			if err == nil {
+				err = os.WriteFile("config.yml", yamlData, 0644)
+				if err != nil {
+					fmt.Print(err)
+				}
+			} else {
+				fmt.Print(err)
+			}
+		} else {
+			fmt.Print(err)
+		}
+	}
+}
+
+func main() {
+	configPath := "config.yml"
+
+	createConfigYml()
 	data, err := os.ReadFile(configPath)
 	for {
 		i := 0
@@ -54,6 +77,8 @@ func main() {
 			}
 
 			time.Sleep(10 * time.Second)
+
+			createConfigYml()
 			data, err = os.ReadFile(configPath)
 			continue
 		}
@@ -103,7 +128,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		fmt.Printf("Error creating Docker client: %v\n", err)
 		os.Exit(1)
