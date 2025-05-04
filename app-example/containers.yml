@@ -1,0 +1,8 @@
+containers:
+  - name: container-1
+    networks:
+      - network-1
+      - network-2
+  - name: container-2
+    networks:
+      - network-3
