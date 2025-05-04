@@ -128,7 +128,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		fmt.Printf("Error creating Docker client: %v\n", err)
 		os.Exit(1)
