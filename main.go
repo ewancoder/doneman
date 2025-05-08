@@ -12,6 +12,23 @@ import (
 	"github.com/docker/docker/client"
 )
 
+func updateHealthCheckFile() {
+	filePath := os.Getenv("HEALTHCHECK_FILE")
+	if filePath == "" {
+		fmt.Print("HEALTHCHECK_FILE environment variable is not set.")
+		return
+	}
+
+	for {
+		currentTime := time.Now().String()
+		err := os.WriteFile(filePath, []byte(currentTime), 0644)
+		if err != nil {
+			fmt.Printf("Failed to write to health check file: %v\n", err)
+		}
+		time.Sleep(30 * time.Second)
+	}
+}
+
 func main() {
 	cfg, err := LoadToolConfig()
 	if err != nil {
@@ -64,6 +81,8 @@ func main() {
 			}
 		}(cont)
 	}
+
+	go updateHealthCheckFile()
 	wg.Wait()
 }
 
