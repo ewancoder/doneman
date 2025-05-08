@@ -19,9 +19,11 @@ func ConvertDockerComposeToConfig(composeFileName, envFileName, networkPattern s
 
 	// Read .env file.
 	if _, err := os.Stat(envFileName); err == nil {
-		envMap, err = godotenv.Read(envFileName)
+		readEnvMap, err := godotenv.Read(envFileName)
 		if err != nil {
-			return output, fmt.Errorf("Failed to read .env file: %v", err)
+			fmt.Errorf("Failed to read .env file, proceeding with empty env: %v", err)
+		} else {
+			envMap = readEnvMap
 		}
 	}
 
