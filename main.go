@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,11 +73,11 @@ func main() {
 	var wg sync.WaitGroup
 	for _, cont := range config.Containers {
 		wg.Add(1)
-		go func(container Container) {
+		go func(cont Container) {
 			defer wg.Done()
 			for {
-				processContainer(cli, container, cfg.NetworkReconnectIntervalSeconds)
-				fmt.Printf("Waiting for %d seconds before checking %s again...\n", cfg.CheckFrequencySeconds, container.Name)
+				processContainer(cli, cont, cfg.NetworkReconnectIntervalSeconds)
+				fmt.Printf("Waiting for %d seconds before checking %s again...\n", cfg.CheckFrequencySeconds, cont.Name)
 				time.Sleep(time.Duration(cfg.CheckFrequencySeconds) * time.Second)
 			}
 		}(cont)
@@ -120,8 +121,10 @@ func processContainer(cli *client.Client, cont Container, networkReconnectInterv
 		fmt.Printf("Disconnected container %s from network %s\n", cont.Name, network)
 	}
 
-	if err := cli.ContainerStart(context.Background(), cont.Name, container.StartOptions{}); err != nil {
+	err = cli.ContainerStart(context.Background(), cont.Name, container.StartOptions{})
+	if err != nil {
 		fmt.Printf("Error starting container %s: %v\n", cont.Name, err)
+		pullNetworkFromSwarm(cli, cont.Name, err)
 		return
 	}
 
@@ -146,4 +149,34 @@ func processContainer(cli *client.Client, cont Container, networkReconnectInterv
 			time.Sleep(time.Duration(networkReconnectInterval) * time.Second)
 		}
 	}
+}
+
+func pullNetworkFromSwarm(cli *client.Client, containerName string, err error) error {
+	errText := err.Error()
+	if contains := strings.Contains(errText, "could not find a network"); contains {
+		parts := strings.Split(errText, "network mode ")
+		if len(parts) > 1 {
+			networkName := strings.Split(parts[1], ":")[0]
+			fmt.Printf("Container could not start because network %s does not exist. Trying to pull the network from swarm...\n", networkName)
+
+			config := &container.Config{
+				Image: "alpine",
+				Cmd:   []string{"/bin/sleep", "10"},
+			}
+			hostConfig := &container.HostConfig{
+				NetworkMode: container.NetworkMode(networkName),
+				AutoRemove:  true,
+			}
+
+			resp, err := cli.ContainerCreate(context.Background(), config, hostConfig, nil, nil, "")
+			if err != nil {
+				fmt.Printf("Error creating container: %v\n", err)
+			} else {
+				if err := cli.ContainerStart(context.Background(), resp.ID, container.StartOptions{}); err != nil {
+					fmt.Printf("Error starting container: %v\n", err)
+				}
+			}
+		}
+	}
+	return err
 }
